@@ -16,15 +16,15 @@
 
 package org.springframework.cloud.stream.app.s3.source;
 
+import javax.sql.DataSource;
+
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.configurationprocessor.MetadataStore;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.cloud.aws.core.env.ResourceIdResolver;
 import org.springframework.cloud.stream.annotation.EnableBinding;
 import org.springframework.cloud.stream.app.file.FileConsumerProperties;
-import org.springframework.cloud.stream.app.file.FileUtils;
-import org.springframework.cloud.stream.app.s3.AmazonS3Configuration;
 import org.springframework.cloud.stream.app.trigger.TriggerConfiguration;
-import org.springframework.cloud.stream.app.trigger.TriggerProperties;
 import org.springframework.cloud.stream.app.trigger.TriggerPropertiesMaxMessagesDefaultUnlimited;
 import org.springframework.cloud.stream.messaging.Source;
 import org.springframework.context.annotation.Bean;
@@ -32,13 +32,22 @@ import org.springframework.context.annotation.Import;
 import org.springframework.integration.aws.inbound.S3InboundFileSynchronizer;
 import org.springframework.integration.aws.inbound.S3InboundFileSynchronizingMessageSource;
 import org.springframework.integration.aws.support.S3SessionFactory;
+import org.springframework.integration.aws.support.filters.S3PersistentAcceptOnceFileListFilter;
 import org.springframework.integration.aws.support.filters.S3RegexPatternFileListFilter;
 import org.springframework.integration.aws.support.filters.S3SimplePatternFileListFilter;
 import org.springframework.integration.dsl.IntegrationFlow;
 import org.springframework.integration.dsl.IntegrationFlows;
+import org.springframework.integration.file.filters.ChainFileListFilter;
+import org.springframework.integration.jdbc.metadata.JdbcMetadataStore;
+import org.springframework.integration.metadata.ConcurrentMetadataStore;
 import org.springframework.util.StringUtils;
+import org.vmware.s3.pdf.custom.FileUtils;
 
 import com.amazonaws.services.s3.AmazonS3;
+import com.amazonaws.services.s3.model.S3ObjectSummary;
+
+import io.micrometer.core.instrument.MeterRegistry;
+import org.springframework.cloud.stream.app.s3.AmazonS3Configuration;
 
 /**
  * @author Artem Bilan
@@ -51,7 +60,17 @@ public class AmazonS3SourceConfiguration {
 
 	@Autowired
 	private AmazonS3SourceProperties s3SourceProperties;
-
+	
+	@Autowired
+	private ConcurrentMetadataStore  metadataStore;
+	
+	MeterRegistry meterRegistry;
+	
+	@Bean
+	public ConcurrentMetadataStore metadataStore(DataSource dataSource) {
+	    return new JdbcMetadataStore(dataSource);
+	}
+	
 	@Bean
 	public S3InboundFileSynchronizer s3InboundFileSynchronizer(AmazonS3 amazonS3,
 			ResourceIdResolver resourceIdResolver) {
@@ -64,12 +83,27 @@ public class AmazonS3SourceConfiguration {
 		synchronizer.setRemoteFileSeparator(this.s3SourceProperties.getRemoteFileSeparator());
 		synchronizer.setTemporaryFileSuffix(this.s3SourceProperties.getTmpFileSuffix());
 
+		ChainFileListFilter<S3ObjectSummary> chainFileListFilter = new ChainFileListFilter<>();
+		
 		if (StringUtils.hasText(this.s3SourceProperties.getFilenamePattern())) {
-			synchronizer.setFilter(new S3SimplePatternFileListFilter(this.s3SourceProperties.getFilenamePattern()));
+			chainFileListFilter.addFilter(new S3SimplePatternFileListFilter(this.s3SourceProperties.getFilenamePattern()));
 		}
 		else if (this.s3SourceProperties.getFilenameRegex() != null) {
-			synchronizer.setFilter(new S3RegexPatternFileListFilter(this.s3SourceProperties.getFilenameRegex()));
+			chainFileListFilter.addFilter(new S3RegexPatternFileListFilter(this.s3SourceProperties.getFilenameRegex()));
 		}
+		
+		chainFileListFilter.addFilter(new S3PersistentAcceptOnceFileListFilter(this.metadataStore, "s3MessageSource"));
+		
+		synchronizer.setFilter(chainFileListFilter);
+		
+		/*
+		 * if (StringUtils.hasText(this.s3SourceProperties.getFilenamePattern())) {
+		 * synchronizer.setFilter(new
+		 * S3SimplePatternFileListFilter(this.s3SourceProperties.getFilenamePattern()));
+		 * } else if (this.s3SourceProperties.getFilenameRegex() != null) {
+		 * synchronizer.setFilter(new
+		 * S3RegexPatternFileListFilter(this.s3SourceProperties.getFilenameRegex())); }
+		 */
 
 		return synchronizer;
 	}
@@ -81,7 +115,7 @@ public class AmazonS3SourceConfiguration {
 				new S3InboundFileSynchronizingMessageSource(s3InboundFileSynchronizer);
 		s3MessageSource.setLocalDirectory(this.s3SourceProperties.getLocalDir());
 		s3MessageSource.setAutoCreateLocalDirectory(this.s3SourceProperties.isAutoCreateLocalDir());
-
+		
 		return FileUtils.enhanceFlowForReadingMode(IntegrationFlows.from(s3MessageSource), fileConsumerProperties)
 				.channel(Source.OUTPUT)
 				.get();

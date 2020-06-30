@@ -15,6 +15,7 @@
 
 package org.springframework.cloud.stream.app.s3;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.cloud.aws.context.annotation.ConditionalOnMissingAmazonClient;
 import org.springframework.cloud.aws.core.region.RegionProvider;
@@ -22,7 +23,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import com.amazonaws.auth.AWSCredentialsProvider;
-import com.amazonaws.regions.Region;
+import com.amazonaws.client.builder.AwsClientBuilder;
+import com.amazonaws.regions.Regions;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3ClientBuilder;
 
@@ -32,13 +34,17 @@ import com.amazonaws.services.s3.AmazonS3ClientBuilder;
 @Configuration
 @ConditionalOnMissingAmazonClient(AmazonS3.class)
 public class AmazonS3Configuration {
-
+	@Value("${cloud.aws.credentials.endpointUrl}")
+	private String endpointUrl;
 	@Bean
 	@ConditionalOnMissingBean
 	public AmazonS3 amazonS3(AWSCredentialsProvider awsCredentialsProvider, RegionProvider regionProvider) {
+		
+		System.out.println(">>>>endpointUrl property>>"+endpointUrl);
 		return AmazonS3ClientBuilder.standard()
 				.withCredentials(awsCredentialsProvider)
-				.withRegion(regionProvider.getRegion().getName())
+				.withEndpointConfiguration(new AwsClientBuilder.EndpointConfiguration(endpointUrl, Regions.US_EAST_1.name()))
+//				.withRegion(regionProvider.getRegion().getName())
 				.build();
 	}
 
